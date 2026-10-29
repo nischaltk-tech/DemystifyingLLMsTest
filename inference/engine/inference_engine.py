@@ -24,8 +24,10 @@ class FullTransformerModel(nn.Module):
         from model.heads import LMHead
 
         self.embeddings = EmbeddingLayer(config=config)
-        self.blocks = BlockStack()
+        self.blocks = BlockStack(config=config)
         self.lm_head = LMHead(config=config)
+        if config.tie_weights:
+            self.lm_head.tie_weights(self.embeddings.token_embedding.embedding.weight)
 
     def forward(self, input_ids: torch.Tensor, **kwargs) -> torch.Tensor:
         h = self.embeddings(input_ids)
@@ -69,7 +71,9 @@ class InferenceEngine:
         Internal lifecycle helper to prepare model state before inference execution.
         """
         if self.model is not None and hasattr(self.model, "train"):
-            self.model.train()
+            self.model.eval()
+        if self.model is not None and hasattr(self.model, "to"):
+            self.model.to(self.device)
 
     def generate_tokens(
         self,
@@ -107,11 +111,9 @@ class InferenceEngine:
                         else:
                             next_token = torch.argmax(next_token_logits, dim=-1).item()
                     except Exception:
-                        self._failed = True
-                        next_token = (tokens[-1] + 1) % self.model_config.vocab_size
+                        raise
                 else:
-                    self._failed = True
-                    next_token = (tokens[-1] + 1) % self.model_config.vocab_size
+                    raise RuntimeError("InferenceEngine requires a callable model")
 
                 tokens.append(int(next_token))
 
@@ -156,6 +158,6 @@ class InferenceEngine:
             except Exception:
                 pass
 
-        # Fallback decode: append dummy synthesized continuation
-        continuation = " [generated continuation tokens]"
-        return prompt + continuation
+        if tokenizer is not None and hasattr(tokenizer, "decode"):
+            return tokenizer.decode(output_ids)
+        return prompt
